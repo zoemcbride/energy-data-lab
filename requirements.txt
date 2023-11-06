@@ -28,6 +28,8 @@ executing==2.0.0
     # via stack-data
 fonttools==4.43.1
     # via matplotlib
+holidays==0.36
+    # via -r requirements.in
 importlib-metadata==6.8.0
     # via jupyter-client
 importlib-resources==6.1.0
@@ -99,6 +101,7 @@ pyparsing==3.1.1
     # via matplotlib
 python-dateutil==2.8.2
     # via
+    #   holidays
     #   jupyter-client
     #   matplotlib
     #   pandas
