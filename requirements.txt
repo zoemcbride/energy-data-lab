@@ -93,6 +93,8 @@ psutil==5.9.5
     # via ipykernel
 ptyprocess==0.7.0
     # via pexpect
+pulp==2.7.0
+    # via -r requirements.in
 pure-eval==0.2.2
     # via stack-data
 pygments==2.16.1
