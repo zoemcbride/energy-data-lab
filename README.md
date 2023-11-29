@@ -8,7 +8,7 @@ Currently simulating energy storage systems using optimization packages like PuL
 Follow along on optimization_problems_ess_simulation.ipynb
 ____
 
-Currently developing and answering energy-related data science & software oriented technical interview questions 👩‍💻
+Developing and answering energy-related data science & software oriented technical interview questions 👩‍💻
 
 Follow along on practice_interview_questions.ipynb
 ____ 
