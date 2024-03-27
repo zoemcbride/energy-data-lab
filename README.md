@@ -1,9 +1,14 @@
 # energy-data-lab
 various data science &amp; analytical studies relating to energy data
 
+----
+
+Creating a full-stack data pipeline 🚰
+
+Follow along in climate_energy_data_pipeline/
 ____
 
-Currently simulating energy storage systems using optimization packages like PuLP 🔋
+Simulating energy storage systems using optimization packages like PuLP 🔋
 
 Follow along on optimization_problems_ess_simulation.ipynb
 ____
