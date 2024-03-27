@@ -12,6 +12,16 @@ asttokens==2.4.0
     # via stack-data
 backcall==0.2.0
     # via ipython
+boto3==1.34.72
+    # via -r requirements.in
+botocore==1.34.72
+    # via
+    #   boto3
+    #   s3transfer
+certifi==2024.2.2
+    # via requests
+charset-normalizer==3.3.2
+    # via requests
 comm==0.1.4
     # via ipykernel
 contourpy==1.1.1
@@ -28,8 +38,12 @@ executing==2.0.0
     # via stack-data
 fonttools==4.43.1
     # via matplotlib
+greenlet==3.0.3
+    # via sqlalchemy
 holidays==0.36
     # via -r requirements.in
+idna==3.6
+    # via requests
 importlib-metadata==6.8.0
     # via jupyter-client
 importlib-resources==6.1.0
@@ -40,6 +54,10 @@ ipython==8.16.1
     # via ipykernel
 jedi==0.19.1
     # via ipython
+jmespath==1.0.1
+    # via
+    #   boto3
+    #   botocore
 joblib==1.3.2
     # via scikit-learn
 jupyter-client==8.3.1
@@ -91,6 +109,8 @@ prompt-toolkit==3.0.39
     # via ipython
 psutil==5.9.5
     # via ipykernel
+psycopg2-binary==2.9.9
+    # via -r requirements.in
 ptyprocess==0.7.0
     # via pexpect
 pulp==2.7.0
@@ -103,6 +123,7 @@ pyparsing==3.1.1
     # via matplotlib
 python-dateutil==2.8.2
     # via
+    #   botocore
     #   holidays
     #   jupyter-client
     #   matplotlib
@@ -113,6 +134,10 @@ pyzmq==25.1.1
     # via
     #   ipykernel
     #   jupyter-client
+requests==2.31.0
+    # via -r requirements.in
+s3transfer==0.10.1
+    # via boto3
 scikit-learn==1.3.1
     # via -r requirements.in
 scipy==1.11.3
@@ -123,6 +148,8 @@ six==1.16.0
     # via
     #   asttokens
     #   python-dateutil
+sqlalchemy==2.0.29
+    # via -r requirements.in
 stack-data==0.6.3
     # via ipython
 threadpoolctl==3.2.0
@@ -140,9 +167,15 @@ traitlets==5.11.2
     #   jupyter-core
     #   matplotlib-inline
 typing-extensions==4.8.0
-    # via ipython
+    # via
+    #   ipython
+    #   sqlalchemy
 tzdata==2023.3
     # via pandas
+urllib3==1.26.18
+    # via
+    #   botocore
+    #   requests
 wcwidth==0.2.8
     # via prompt-toolkit
 zipp==3.17.0
