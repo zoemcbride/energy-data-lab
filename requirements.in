@@ -10,3 +10,4 @@ requests
 sqlalchemy
 boto3
 psycopg2-binary
+kaggle
