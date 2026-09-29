@@ -1,28 +1,25 @@
 # Day-ahead solar generation forecast
 
-Weather models publish irradiance forecasts, and those forecasts are
-systematically wrong in ways that depend on time of day, season, and sky
-condition. This project forecasts hourly solar generation a day ahead from
-those weather inputs, and asks whether a statistical model beats running the
-raw forecast straight through a physical panel model.
+Physics-based weather models publish temperature, cloud cover, irradiance and
+other weather input forecasts. This project forecasts hourly solar generation
+a day ahead from those weather inputs, and asks whether a statistical (ML)
+model beats running the raw forecast straight through a physical panel model.
 
 ## Motivation
 
-A small device running on a solar panel and a battery has to budget power
-against what the sun actually delivers. The operational question is not
-"what will irradiance be tomorrow" on its own, it is "will the harvest cover
-the load, and should the device throttle back tonight."
+A device running on a solar panel and a battery has to budget power against
+what the sun actually delivers. The operational question is "will the solar
+power cover the load, and should the device throttle back tonight."
 
 That makes the two error directions asymmetric. Forecast high and the battery
 drains, taking the device offline until it recovers. Forecast low and you
-throttle for no reason. A model with good average error can still be the
-wrong model if it misses in the expensive direction on the days that matter.
+throttle for no reason. A model with good average error can still be the wrong
+model if it misses in the expensive direction on the days that matter.
 
 ## Setup
 
-Weather forecast in, generation out, learned end to end. The model absorbs
-both the irradiance-to-power conversion and the forecast's own bias in a
-single step.
+Weather forecast in, PV generation out. One model learns the conversion and
+the forecast's bias together.
 
     forecast weather (day-1 lead)  ->  [model]  ->  hourly generation
 
@@ -60,22 +57,23 @@ Error is broken out three ways, with the third being the point of interest:
 ## What this cannot tell you
 
 The target is synthetic. It is a physical model run on reanalysis, not a
-metered panel, and that bounds the claims twice over.
+metered panel.
 
 First, ERA5 is itself a model. Reanalysis is well constrained for variables
 with dense instrument coverage, like temperature, but there is no comparable
-global network of pyranometers, so reanalysis irradiance is largely a model's
-radiative transfer scheme applied to its own cloud field. Clouds are the
-hardest thing for weather models to get right.
+global network of pyranometers (devices which measure irradiance), so
+reanalysis irradiance is computed from the model's own cloud field rather than
+measured. Cloud coverage is the hardest thing for weather models to get right.
 
-Second, a modeled target has no soiling, shading, inverter clipping, snow, or
-outages. Real generation does. The target is therefore a smooth deterministic
-function of weather with none of the irreducible noise a real panel has, so
-error metrics here will look better than a production model's would.
+Second, the synthetic, modeled target has no soiling, shading, inverter
+clipping, snow, or outages. Real generation does. The target is therefore a
+smooth deterministic function of weather with none of the irreducible noise a
+real panel has, so error metrics here will look better than a production
+model's would.
 
 Third, and most relevant to the ramp analysis above: ERA5 is hourly and
-roughly 31 km, which smooths out exactly the fast cloud transitions that
-cause real ramp errors. The ramp problem is present in this data but damped.
+roughly 31 km, which smooths out exactly the fast cloud transitions that cause
+real ramp errors. The ramp problem is present in this data but damped.
 
 Upgrading the target to measured irradiance from
 [SURFRAD](https://gml.noaa.gov/grad/surfrad/), NOAA's ground pyranometer
@@ -95,8 +93,7 @@ seven US stations, none near Los Angeles.
 - **Time alignment.** ERA5 hourly values are period aggregates while forecast
   fields are generally instantaneous. A one-hour offset would still run and
   still look plausible. This needs checking before any score is trusted.
-- **Site.** Starting in the Los Angeles area. Coastal LA carries a marine layer
-  that inland does not, which is a real choice and not a detail.
+- **Site.** Starting in the Los Angeles area.
 
 ## Scope
 
