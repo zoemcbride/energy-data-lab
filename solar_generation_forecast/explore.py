@@ -26,25 +26,26 @@ CACHE = Path(__file__).parent / "cache"
 def get_hourly(url: str, variables: list[str], label: str) -> pd.DataFrame:
     """GET an Open-Meteo endpoint and return its hourly block as a frame.
 
-    Caches to cache/<label>.csv so repeated runs do not re-hit the API.
+    Caches per label, site, and date range, so repeated runs skip the API but
+    changing any of those triggers a fresh pull.
     """
+    params = {
+        "latitude": LAT,
+        "longitude": LON,
+        "start_date": START,
+        "end_date": END,
+        "hourly": ",".join(variables),
+        "timezone": TZ,
+    }
+
+    # Cache key has to include everything that changes the request, or editing
+    # the dates silently hands back the previous pull.
     CACHE.mkdir(exist_ok=True)
-    cached = CACHE / f"{label}.csv"
+    cached = CACHE / f"{label}_{LAT}_{LON}_{START}_{END}.csv"
     if cached.exists():
         return pd.read_csv(cached, parse_dates=["time"])
 
-    response = requests.get(
-        url,
-        params={
-            "latitude": LAT,
-            "longitude": LON,
-            "start_date": START,
-            "end_date": END,
-            "hourly": ",".join(variables),
-            "timezone": TZ,
-        },
-        timeout=60,
-    )
+    response = requests.get(url, params=params, timeout=60)
     response.raise_for_status()
 
     df = pd.DataFrame(response.json()["hourly"])
