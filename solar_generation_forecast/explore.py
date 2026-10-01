@@ -13,6 +13,7 @@ from hashlib import md5
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 import requests
 import seaborn as sns
@@ -44,6 +45,9 @@ CACHE = Path(__file__).parent / "cache"
 # Window for the diagnostic plot. Seaborn renders static, so a couple of weeks
 # is about as much as stays readable at hourly resolution.
 PLOT_START, PLOT_END = "2024-06-01", "2024-06-14"
+# Generation plot window. Must sit inside the test period, since model
+# predictions only exist there.
+GEN_PLOT_START, GEN_PLOT_END = "2026-07-06", "2026-07-19"
 
 
 def get_hourly(url: str, variables: list[str], label: str) -> pd.DataFrame:
@@ -273,6 +277,82 @@ def plot_day(date: str, forecast: pd.Series, actual: pd.Series) -> None:
     fig.tight_layout()
 
 
+def reassemble_full_series(daylight_values: pd.Series, max_zenith: float = 90.0) -> pd.Series:
+    """Expand a daylight-only series into a complete hourly series.
+
+    Night generation is not predicted, it is known: the sun is down, so output
+    is zero. Letting a model learn that wastes capacity on the trivial part of
+    the problem and lets it emit physically impossible nonzero values at 2am.
+
+    Zeros are filled only where solar geometry says the sun is below the
+    horizon. Any daylight hour that is still missing, because a feature was
+    dropped upstream, stays NaN so the gap is visible rather than silently
+    becoming a zero that looks like a real forecast of darkness.
+    """
+    full_index = pd.date_range(
+        daylight_values.index.min(), daylight_values.index.max(), freq="h", tz="UTC"
+    )
+    expanded = daylight_values.reindex(full_index)
+
+    solar_position = pvlib.location.Location(LAT, LON, tz="UTC").get_solarposition(full_index)
+    night = solar_position["apparent_zenith"].to_numpy() >= max_zenith
+    expanded[night] = 0.0
+
+    return expanded
+
+
+def plot_generation_window(frame: pd.DataFrame, start: str = GEN_PLOT_START,
+                           end: str = GEN_PLOT_END) -> None:
+    """Plot target, baseline and model prediction over a span of days.
+
+    frame needs target, baseline and prediction columns and a tz-aware index.
+    Dates are local calendar days.
+    """
+    local = frame.copy()
+    local.index = local.index.tz_convert(TZ)
+    window = local.loc[start:end]
+    if window.empty:
+        raise ValueError(f"{start} to {end} has no rows; is it inside the test period?")
+
+    # Night rows were dropped by the daylight filter. Reindexing to a complete
+    # hourly range turns those gaps into NaN so the lines break overnight
+    # instead of being drawn straight across the dark hours.
+    window = window.reindex(
+        pd.date_range(window.index.min(), window.index.max(), freq="h", tz=TZ)
+    )
+
+    fig, (ax_series, ax_error) = plt.subplots(
+        2, 1, figsize=(14, 8), sharex=True, gridspec_kw={"height_ratios": [2, 1]}
+    )
+
+    sns.lineplot(x=window.index, y=window["target"], ax=ax_series,
+                 color="#333333", lw=2, label="target (physics on ERA5)")
+    sns.lineplot(x=window.index, y=window["baseline"], ax=ax_series,
+                 color="#E45756", label="baseline (physics on forecast)")
+    sns.lineplot(x=window.index, y=window["prediction"], ax=ax_series,
+                 color="#4C78A8", label="model prediction")
+    ax_series.set_ylabel(f"DC power (W, pdc0={PDC0})")
+    ax_series.set_title(f"Target vs baseline vs model, {start} to {end} ({TZ})")
+    ax_series.legend(loc="upper left", fontsize=9)
+    ax_series.grid(alpha=0.25)
+
+    sns.lineplot(x=window.index, y=window["baseline"] - window["target"],
+                 ax=ax_error, color="#E45756", label="baseline error")
+    sns.lineplot(x=window.index, y=window["prediction"] - window["target"],
+                 ax=ax_error, color="#4C78A8", label="model error")
+    ax_error.axhline(0, color="gray", ls=":", lw=1.5)
+    ax_error.set_ylabel("error (W)")
+    ax_error.set_xlabel(f"local time ({TZ})")
+    ax_error.legend(loc="upper left", fontsize=9)
+    ax_error.grid(alpha=0.25)
+
+    window_mae = (window[["baseline", "prediction"]].sub(window["target"], axis=0)).abs().mean()
+    print(f"  window MAE: baseline {window_mae['baseline']:.1f} W, "
+          f"model {window_mae['prediction']:.1f} W")
+
+    fig.tight_layout()
+
+
 def daylight_filter(df, max_zenith: float = 90.0):
     """Keep only the rows where the sun is high enough to generate.
 
@@ -320,8 +400,8 @@ def build_features(merged: pd.DataFrame, target: pd.Series, baseline: pd.Series)
 
     Features come from the _forecast columns only, plus quantities derived from
     time and geometry, which belong to neither source. The baseline is included
-    as a feature on purpose: the model then only has to learn the correction to
-    the physics rather than rediscover the physics.
+    as a feature on purpose, so that the model then only has to learn the correction to
+    the physics rather than try and recreate the result from the physics-based approach.
 
     Keeping target and baseline in the same frame means one split instead of
     three objects to hold in alignment.
@@ -340,16 +420,29 @@ def build_features(merged: pd.DataFrame, target: pd.Series, baseline: pd.Series)
     # Fraction of a clear sky getting through, and how much of it is scattered.
     # These two carry most of the sky-condition signal, and more cleanly than
     # cloud_cover, which ERA5 reports almost bimodally.
+    # Both ratios are undefined at the very edges of daylight, where clear-sky
+    # GHI or forecast GHI is zero. Fill with 0 rather than letting dropna take
+    # the row: those are the sunrise and sunset hours, which is precisely where
+    # the ramp analysis lives.
     frame["clearsky_index"] = (
         frame["shortwave_radiation"] / clearsky["ghi"].where(clearsky["ghi"] > 0)
-    ).clip(0, 1.2)
+    ).clip(0, 1.2).fillna(0.0)
     frame["diffuse_fraction"] = (
         frame["diffuse_radiation"] / frame["shortwave_radiation"].where(frame["shortwave_radiation"] > 0)
-    ).clip(0, 1)
+    ).clip(0, 1).fillna(0.0)
 
     # Local hour, not UTC, so the number lines up with the diurnal cycle.
     frame["hour"] = frame.index.tz_convert(TZ).hour
     frame["day_of_year"] = frame.index.dayofyear
+
+    # Cyclical encodings alongside the raw versions. Trees split raw integers
+    # happily, but day 365 and day 1 are the same season and a tree has to
+    # spend splits learning that. Ridge needs these outright, since it reads
+    # hour 23 and hour 0 as maximally distant.
+    frame["doy_sin"] = np.sin(2 * np.pi * frame["day_of_year"] / 365.25)
+    frame["doy_cos"] = np.cos(2 * np.pi * frame["day_of_year"] / 365.25)
+    frame["hour_sin"] = np.sin(2 * np.pi * frame["hour"] / 24)
+    frame["hour_cos"] = np.cos(2 * np.pi * frame["hour"] / 24)
 
     frame["baseline"] = baseline
     frame["target"] = target
@@ -364,7 +457,7 @@ def build_features(merged: pd.DataFrame, target: pd.Series, baseline: pd.Series)
 def split_by_time(frame: pd.DataFrame, cutoff: str = TEST_START):
     """Chronological train/test split at a calendar date.
 
-    train_test_split with shuffle=False slices in order rather than randomising,
+    train_test_split with shuffle=False slices in order rather than randomizing,
     which is what you want here: adjacent hours are highly correlated, so a
     random split would put near-duplicates of test rows into training and
     inflate every score. test_size is derived from the date so the boundary
@@ -399,7 +492,7 @@ if __name__ == "__main__":
     plot_day("2024-06-21", pv_dc_forecast, pv_dc_actual)
 
     frame = build_features(merged, pv_dc_actual, pv_dc_forecast)
-    train, test = split_by_time(frame)
+    train, test = split_by_time(frame, cutoff=TEST_START)
     feature_cols = [c for c in frame.columns if c != "target"]
 
     print(f"\n{len(feature_cols)} features: {feature_cols}")
@@ -410,6 +503,7 @@ if __name__ == "__main__":
     model.fit(train[feature_cols], train["target"])
     predictions = model.predict(test[feature_cols])
 
+    # print regression dict for baseline vs actual vs gradient boosted tree forecast
     results = pd.DataFrame([
         create_regression_dict(test["target"], test["baseline"], "baseline (physics on forecast)"),
         create_regression_dict(test["target"], predictions, "HistGradientBoosting"),
@@ -419,8 +513,20 @@ if __name__ == "__main__":
     baseline_mae, model_mae = results["MAE_W"].iloc[0], results["MAE_W"].iloc[1]
     print(f"\nskill vs baseline (MAE): {1 - model_mae / baseline_mae:+.1%}")
 
+    # Expand to a complete hourly series before plotting: a delivered forecast
+    # has no holes at night, even though the metrics above exclude them.
+    full = pd.DataFrame({
+        "target": reassemble_full_series(test["target"]),
+        "baseline": reassemble_full_series(test["baseline"]),
+        "prediction": reassemble_full_series(pd.Series(predictions, index=test.index)),
+    })
+    unexplained = full["prediction"].isna().sum()
+    print(f"\nreassembled to {len(full)} hourly rows, {unexplained} daylight gaps")
+
+    print(f"Generation, {GEN_PLOT_START} to {GEN_PLOT_END}:")
+    plot_generation_window(full)
+
     # show every figure plotted
     plt.show()
 
-    # print regression dict for baseline vs actual vs gradient boosted tree forecast
 
