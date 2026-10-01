@@ -37,6 +37,33 @@ TILT, AZIMUTH = 34, 180 # assumes panel tilt~lat, facing due south
 PDC0 = 1000 # nameplate DC in watts, setting to 1000 makes this per-kW
 GAMMA_PDC = -0.004 # power lost per degC above 25*C
 
+# --- features -------------------------------------------------------------
+# Everything the model sees, grouped by where it comes from. Edit here rather
+# than hunting through build_features.
+#
+# Note that TIME_FEATURES are redundant in principle: apparent_zenith and
+# azimuth together already pin down time of day and day of year at a fixed
+# site. They are kept because an explicit split on season is easier for a tree
+# to use than inverting the geometry. Worth testing rather than assuming.
+FORECAST_FEATURES = [
+    "shortwave_radiation",       # GHI
+    "direct_normal_irradiance",  # DNI
+    "diffuse_radiation",         # DHI
+    "temperature_2m",
+    "wind_speed_10m",
+    "cloud_cover",
+]
+GEOMETRY_FEATURES = ["apparent_zenith", "azimuth", "clearsky_ghi"]
+SKY_FEATURES = ["clearsky_index", "diffuse_fraction"]
+TIME_FEATURES = ["doy_sin", "doy_cos", "hour_sin", "hour_cos"]
+PHYSICS_FEATURES = ["baseline"]  # the physics answer, so the model learns the correction
+
+FEATURES = (
+    FORECAST_FEATURES + GEOMETRY_FEATURES + SKY_FEATURES + TIME_FEATURES + PHYSICS_FEATURES
+)
+TARGET = "target"
+
+
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 PREVIOUS_RUNS_URL = "https://previous-runs-api.open-meteo.com/v1/forecast"
 
@@ -431,27 +458,31 @@ def build_features(merged: pd.DataFrame, target: pd.Series, baseline: pd.Series)
         frame["diffuse_radiation"] / frame["shortwave_radiation"].where(frame["shortwave_radiation"] > 0)
     ).clip(0, 1).fillna(0.0)
 
-    # Local hour, not UTC, so the number lines up with the diurnal cycle.
-    frame["hour"] = frame.index.tz_convert(TZ).hour
-    frame["day_of_year"] = frame.index.dayofyear
-
-    # Cyclical encodings alongside the raw versions. Trees split raw integers
-    # happily, but day 365 and day 1 are the same season and a tree has to
-    # spend splits learning that. Ridge needs these outright, since it reads
-    # hour 23 and hour 0 as maximally distant.
-    frame["doy_sin"] = np.sin(2 * np.pi * frame["day_of_year"] / 365.25)
-    frame["doy_cos"] = np.cos(2 * np.pi * frame["day_of_year"] / 365.25)
-    frame["hour_sin"] = np.sin(2 * np.pi * frame["hour"] / 24)
-    frame["hour_cos"] = np.cos(2 * np.pi * frame["hour"] / 24)
+    # Cyclical only, no raw hour or day_of_year. Trees split raw integers
+    # happily, but keeping both forms is pure redundancy, and ridge needs the
+    # cyclical form regardless since it reads hour 23 and hour 0 as maximally
+    # distant. Local hour, not UTC, so the value lines up with the day.
+    hour = frame.index.tz_convert(TZ).hour
+    day_of_year = frame.index.dayofyear
+    frame["doy_sin"] = np.sin(2 * np.pi * day_of_year / 365.25)
+    frame["doy_cos"] = np.cos(2 * np.pi * day_of_year / 365.25)
+    frame["hour_sin"] = np.sin(2 * np.pi * hour / 24)
+    frame["hour_cos"] = np.cos(2 * np.pi * hour / 24)
 
     frame["baseline"] = baseline
-    frame["target"] = target
+    frame[TARGET] = target
 
     frame = daylight_filter(frame).dropna()
 
-    leaked = [c for c in frame.columns if "_actual" in c]
+    leaked = [c for c in FEATURES if "_actual" in c]
     assert not leaked, f"actual columns leaked into features: {leaked}"
-    return frame
+
+    missing = [c for c in FEATURES + [TARGET] if c not in frame.columns]
+    assert not missing, f"FEATURES names columns that were never built: {missing}"
+
+    # Return exactly what is declared, so an unused intermediate column cannot
+    # drift into the model by accident.
+    return frame[FEATURES + [TARGET]]
 
 
 def split_by_time(frame: pd.DataFrame, cutoff: str = TEST_START):
@@ -500,13 +531,13 @@ if __name__ == "__main__":
     print(f"test  {len(test)} rows, {test.index.min().date()} to {test.index.max().date()}")
 
     model = HistGradientBoostingRegressor(random_state=0)
-    model.fit(train[feature_cols], train["target"])
-    predictions = model.predict(test[feature_cols])
+    model.fit(train[FEATURES], train[TARGET])
+    predictions = model.predict(test[FEATURES])
 
     # print regression dict for baseline vs actual vs gradient boosted tree forecast
     results = pd.DataFrame([
-        create_regression_dict(test["target"], test["baseline"], "baseline (physics on forecast)"),
-        create_regression_dict(test["target"], predictions, "HistGradientBoosting"),
+        create_regression_dict(test[TARGET], test["baseline"], "baseline (physics on forecast)"),
+        create_regression_dict(test[TARGET], predictions, "HistGradientBoosting"),
     ])
     print(f"\nTest set, daylight hours only:\n{results.to_string(index=False)}")
 
@@ -516,7 +547,7 @@ if __name__ == "__main__":
     # Expand to a complete hourly series before plotting: a delivered forecast
     # has no holes at night, even though the metrics above exclude them.
     full = pd.DataFrame({
-        "target": reassemble_full_series(test["target"]),
+        "target": reassemble_full_series(test[TARGET]),
         "baseline": reassemble_full_series(test["baseline"]),
         "prediction": reassemble_full_series(pd.Series(predictions, index=test.index)),
     })
